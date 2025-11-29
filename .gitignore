@@ -1,0 +1,23 @@
+# Build Dateien
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+
+# Dependencies
+dependencies.lock
+managed_components/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
