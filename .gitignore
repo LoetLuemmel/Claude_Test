@@ -21,3 +21,4 @@ managed_components/
 # Python
 __pycache__/
 *.pyc
+build_log.txt

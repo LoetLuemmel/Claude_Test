@@ -1,107 +1,138 @@
 /*
- * ESP32-C3 Matter Light Control
- * Steuert die eingebaute LED über Apple Home via Matter
- */
+   This example code is in the Public Domain (or CC0 licensed, at your option.)
+
+   Unless required by applicable law or agreed to in writing, this
+   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+   CONDITIONS OF ANY KIND, either express or implied.
+*/
 
 #include <esp_err.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
-#include <driver/gpio.h>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
 #include <esp_matter_ota.h>
 
+#include <common_macros.h>
+#include <log_heap_numbers.h>
+
 #include <app_priv.h>
 #include <app_reset.h>
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+#include <platform/ESP32/OpenthreadLauncher.h>
+#endif
+
+#include <app/server/CommissioningWindowManager.h>
+#include <app/server/Server.h>
+
+#ifdef CONFIG_ENABLE_SET_CERT_DECLARATION_API
+#include <esp_matter_providers.h>
+#include <lib/support/Span.h>
+#ifdef CONFIG_SEC_CERT_DAC_PROVIDER
+#include <platform/ESP32/ESP32SecureCertDACProvider.h>
+#elif defined(CONFIG_FACTORY_PARTITION_DAC_PROVIDER)
+#include <platform/ESP32/ESP32FactoryDataProvider.h>
+#endif
+using namespace chip::DeviceLayer;
+#endif
+
+static const char *TAG = "app_main";
+uint16_t light_endpoint_id = 0;
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
 using namespace esp_matter::endpoint;
 using namespace chip::app::Clusters;
 
-static const char *TAG = "ESP32_MATTER_LIGHT";
+constexpr auto k_timeout_seconds = 300;
 
-// GPIO Pin für die eingebaute LED des ESP32-C3
-// Die meisten ESP32-C3 DevKits verwenden GPIO 8 für die eingebaute LED
-#define LED_GPIO GPIO_NUM_8
+#ifdef CONFIG_ENABLE_SET_CERT_DECLARATION_API
+extern const uint8_t cd_start[] asm("_binary_certification_declaration_der_start");
+extern const uint8_t cd_end[] asm("_binary_certification_declaration_der_end");
 
-// Endpoint und Cluster Handles
-static uint16_t light_endpoint_id = 0;
+const chip::ByteSpan cdSpan(cd_start, static_cast<size_t>(cd_end - cd_start));
+#endif // CONFIG_ENABLE_SET_CERT_DECLARATION_API
 
-/* Callback für Attribut-Updates */
-static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id,
-                                          uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data)
-{
-    esp_err_t err = ESP_OK;
+#if CONFIG_ENABLE_ENCRYPTED_OTA
+extern const char decryption_key_start[] asm("_binary_esp_image_encryption_key_pem_start");
+extern const char decryption_key_end[] asm("_binary_esp_image_encryption_key_pem_end");
 
-    if (type == PRE_UPDATE) {
-        /* Wird vor dem Update aufgerufen */
-        ESP_LOGI(TAG, "Attribute update: endpoint_id: %d, cluster_id: %ld, attribute_id: %ld",
-                 endpoint_id, cluster_id, attribute_id);
-    } else if (type == POST_UPDATE) {
-        /* Wird nach dem Update aufgerufen - hier steuern wir die LED */
+static const char *s_decryption_key = decryption_key_start;
+static const uint16_t s_decryption_key_len = decryption_key_end - decryption_key_start;
+#endif // CONFIG_ENABLE_ENCRYPTED_OTA
 
-        // On/Off Cluster
-        if (cluster_id == OnOff::Id && attribute_id == OnOff::Attributes::OnOff::Id) {
-            bool led_state = val->val.b;
-            ESP_LOGI(TAG, "LED wird %s", led_state ? "eingeschaltet" : "ausgeschaltet");
-
-            // LED steuern (aktiv HIGH)
-            gpio_set_level(LED_GPIO, led_state ? 1 : 0);
-        }
-    }
-
-    return err;
-}
-
-/* Identifikations-Callback (z.B. wenn man das Gerät in Apple Home identifiziert) */
-static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id,
-                                        uint8_t effect_id, uint8_t effect_variant, void *priv_data)
-{
-    ESP_LOGI(TAG, "Identification callback: endpoint: %d, effect: %d", endpoint_id, effect_id);
-
-    // Optional: LED blinken lassen zur Identifikation
-    if (type == identification::callback_type_t::START) {
-        ESP_LOGI(TAG, "Identifikation gestartet - LED blinkt");
-        // Hier könnte man die LED blinken lassen
-    } else if (type == identification::callback_type_t::STOP) {
-        ESP_LOGI(TAG, "Identifikation gestoppt");
-    }
-
-    return ESP_OK;
-}
-
-/* Event Handler für Matter Events */
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
-        ESP_LOGI(TAG, "IP-Adresse geändert");
+        ESP_LOGI(TAG, "Interface IP Address changed");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
-        ESP_LOGI(TAG, "Commissioning abgeschlossen - Gerät ist mit Apple Home verbunden!");
+        ESP_LOGI(TAG, "Commissioning complete");
+        MEMORY_PROFILER_DUMP_HEAP_STAT("commissioning complete");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kFailSafeTimerExpired:
-        ESP_LOGI(TAG, "Commissioning Fail-Safe Timer abgelaufen");
+        ESP_LOGI(TAG, "Commissioning failed, fail safe timer expired");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
-        ESP_LOGI(TAG, "Commissioning Session gestartet");
+        ESP_LOGI(TAG, "Commissioning session started");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
-        ESP_LOGI(TAG, "Commissioning Session gestoppt");
+        ESP_LOGI(TAG, "Commissioning session stopped");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowOpened:
-        ESP_LOGI(TAG, "Commissioning Fenster geöffnet");
+        ESP_LOGI(TAG, "Commissioning window opened");
+        MEMORY_PROFILER_DUMP_HEAP_STAT("commissioning window opened");
         break;
 
     case chip::DeviceLayer::DeviceEventType::kCommissioningWindowClosed:
-        ESP_LOGI(TAG, "Commissioning Fenster geschlossen");
+        ESP_LOGI(TAG, "Commissioning window closed");
+        break;
+
+    case chip::DeviceLayer::DeviceEventType::kFabricRemoved:
+        {
+            ESP_LOGI(TAG, "Fabric removed successfully");
+            if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0)
+            {
+                chip::CommissioningWindowManager & commissionMgr = chip::Server::GetInstance().GetCommissioningWindowManager();
+                constexpr auto kTimeoutSeconds = chip::System::Clock::Seconds16(k_timeout_seconds);
+                if (!commissionMgr.IsCommissioningWindowOpen())
+                {
+                    /* After removing last fabric, this example does not remove the Wi-Fi credentials
+                     * and still has IP connectivity so, only advertising on DNS-SD.
+                     */
+                    CHIP_ERROR err = commissionMgr.OpenBasicCommissioningWindow(kTimeoutSeconds,
+                                                    chip::CommissioningWindowAdvertisement::kDnssdOnly);
+                    if (err != CHIP_NO_ERROR)
+                    {
+                        ESP_LOGE(TAG, "Failed to open commissioning window, err:%" CHIP_ERROR_FORMAT, err.Format());
+                    }
+                }
+            }
+        break;
+        }
+
+    case chip::DeviceLayer::DeviceEventType::kFabricWillBeRemoved:
+        ESP_LOGI(TAG, "Fabric will be removed");
+        break;
+
+    case chip::DeviceLayer::DeviceEventType::kFabricUpdated:
+        ESP_LOGI(TAG, "Fabric is updated");
+        break;
+
+    case chip::DeviceLayer::DeviceEventType::kFabricCommitted:
+        ESP_LOGI(TAG, "Fabric is committed");
+        break;
+
+    case chip::DeviceLayer::DeviceEventType::kBLEDeinitialized:
+        ESP_LOGI(TAG, "BLE deinitialized and memory reclaimed");
+        MEMORY_PROFILER_DUMP_HEAP_STAT("BLE deinitialized");
         break;
 
     default:
@@ -109,97 +140,137 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
     }
 }
 
-/* LED GPIO initialisieren */
-static void app_driver_init()
+// This callback is invoked when clients interact with the Identify Cluster.
+// In the callback implementation, an endpoint can identify itself. (e.g., by flashing an LED or light).
+static esp_err_t app_identification_cb(identification::callback_type_t type, uint16_t endpoint_id, uint8_t effect_id,
+                                       uint8_t effect_variant, void *priv_data)
 {
-    ESP_LOGI(TAG, "Initialisiere LED auf GPIO %d", LED_GPIO);
+    ESP_LOGI(TAG, "Identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
+    return ESP_OK;
+}
 
-    // GPIO als Output konfigurieren
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << LED_GPIO);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_conf);
+// This callback is called for every attribute update. The callback implementation shall
+// handle the desired attributes and return an appropriate error code. If the attribute
+// is not of your interest, please do not return an error code and strictly return ESP_OK.
+static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id,
+                                         uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data)
+{
+    esp_err_t err = ESP_OK;
 
-    // LED initial ausschalten
-    gpio_set_level(LED_GPIO, 0);
-    ESP_LOGI(TAG, "LED initialisiert (ausgeschaltet)");
+    if (type == PRE_UPDATE) {
+        /* Driver update */
+        app_driver_handle_t driver_handle = (app_driver_handle_t)priv_data;
+        err = app_driver_attribute_update(driver_handle, endpoint_id, cluster_id, attribute_id, val);
+    }
+
+    return err;
 }
 
 extern "C" void app_main()
 {
     esp_err_t err = ESP_OK;
 
-    ESP_LOGI(TAG, "ESP32-C3 Matter Light Starting...");
+    /* Initialize the ESP NVS layer */
+    nvs_flash_init();
 
-    /* NVS Flash initialisieren (für WiFi und Matter Konfiguration) */
-    err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
+    MEMORY_PROFILER_DUMP_HEAP_STAT("Bootup");
 
-    /* LED Driver initialisieren */
-    app_driver_init();
+    /* Initialize driver */
+    app_driver_handle_t light_handle = app_driver_light_init();
+    app_driver_handle_t button_handle = app_driver_button_init();
+    app_reset_button_register(button_handle);
 
-    /* Matter Node erstellen */
+    /* Create a Matter node and add the mandatory Root Node device type on endpoint 0 */
     node::config_t node_config;
+
+    // node handle can be used to add/modify other endpoints.
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
-    if (!node) {
-        ESP_LOGE(TAG, "Matter Node konnte nicht erstellt werden");
-        return;
-    }
+    ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    /* On/Off Light Endpoint erstellen */
-    on_off_light::config_t light_config;
-    light_config.on_off.on_off = false;  // Initial aus
-    light_config.on_off.lighting.start_up_on_off = nullptr;  // Kein Startup-Verhalten
+    MEMORY_PROFILER_DUMP_HEAP_STAT("node created");
 
-    endpoint_t *endpoint = on_off_light::create(node, &light_config, ENDPOINT_FLAG_NONE, NULL);
-    if (!endpoint) {
-        ESP_LOGE(TAG, "Light Endpoint konnte nicht erstellt werden");
-        return;
-    }
+    extended_color_light::config_t light_config;
+    light_config.on_off.on_off = DEFAULT_POWER;
+    light_config.on_off_lighting.start_up_on_off = nullptr;
+    light_config.level_control.current_level = DEFAULT_BRIGHTNESS;
+    light_config.level_control.on_level = DEFAULT_BRIGHTNESS;
+    light_config.level_control_lighting.start_up_current_level = DEFAULT_BRIGHTNESS;
+    light_config.color_control.color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
+    light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
+    light_config.color_control_color_temperature.start_up_color_temperature_mireds = nullptr;
+
+    // endpoint handles can be used to add/modify clusters.
+    endpoint_t *endpoint = extended_color_light::create(node, &light_config, ENDPOINT_FLAG_NONE, light_handle);
+    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create extended color light endpoint"));
 
     light_endpoint_id = endpoint::get_id(endpoint);
-    ESP_LOGI(TAG, "Light Endpoint erstellt mit ID: %d", light_endpoint_id);
+    ESP_LOGI(TAG, "Light created with endpoint_id %d", light_endpoint_id);
 
-    /* Cluster-spezifische Konfiguration */
-    cluster_t *cluster = cluster::get(endpoint, OnOff::Id);
-    if (cluster) {
-        cluster::on_off::feature::lighting::config_t lighting_config;
-        lighting_config.lighting_level_control = 0;
-        cluster::on_off::feature::lighting::add(cluster, &lighting_config);
-    }
+    /* Mark deferred persistence for some attributes that might be changed rapidly */
+    attribute_t *current_level_attribute = attribute::get(light_endpoint_id, LevelControl::Id, LevelControl::Attributes::CurrentLevel::Id);
+    attribute::set_deferred_persistence(current_level_attribute);
 
-    /* Device Type: On/Off Light (0x0100) */
-    ESP_LOGI(TAG, "Device Type: On/Off Light");
+    attribute_t *current_x_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentX::Id);
+    attribute::set_deferred_persistence(current_x_attribute);
+    attribute_t *current_y_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentY::Id);
+    attribute::set_deferred_persistence(current_y_attribute);
+    attribute_t *color_temp_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::ColorTemperatureMireds::Id);
+    attribute::set_deferred_persistence(color_temp_attribute);
 
-    /* Matter Stack starten */
-    ESP_LOGI(TAG, "Starte Matter Stack...");
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD && CHIP_DEVICE_CONFIG_ENABLE_WIFI_STATION
+    // Enable secondary network interface
+    secondary_network_interface::config_t secondary_network_interface_config;
+    endpoint = endpoint::secondary_network_interface::create(node, &secondary_network_interface_config, ENDPOINT_FLAG_NONE, nullptr);
+    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create secondary network interface endpoint"));
+#endif
+
+
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+    /* Set OpenThread platform config */
+    esp_openthread_platform_config_t config = {
+        .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
+        .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
+        .port_config = ESP_OPENTHREAD_DEFAULT_PORT_CONFIG(),
+    };
+    set_openthread_platform_config(&config);
+#endif
+
+#ifdef CONFIG_ENABLE_SET_CERT_DECLARATION_API
+    auto * dac_provider = get_dac_provider();
+#ifdef CONFIG_SEC_CERT_DAC_PROVIDER
+    static_cast<ESP32SecureCertDACProvider *>(dac_provider)->SetCertificationDeclaration(cdSpan);
+#elif defined(CONFIG_FACTORY_PARTITION_DAC_PROVIDER)
+    static_cast<ESP32FactoryDataProvider *>(dac_provider)->SetCertificationDeclaration(cdSpan);
+#endif
+#endif // CONFIG_ENABLE_SET_CERT_DECLARATION_API
+
+    /* Matter start */
     err = esp_matter::start(app_event_cb);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Matter konnte nicht gestartet werden: %d", err);
-        return;
-    }
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
-    /* Commissioning Fenster öffnen (für Pairing mit Apple Home) */
-    // Mit Bluetooth LE
-    ESP_LOGI(TAG, "Öffne Commissioning Fenster für Apple Home Pairing...");
+    MEMORY_PROFILER_DUMP_HEAP_STAT("matter started");
 
-    // QR Code und Manual Pairing Code werden in den Logs angezeigt
-    ESP_LOGI(TAG, "===============================================");
-    ESP_LOGI(TAG, "Bereit für Apple Home Pairing!");
-    ESP_LOGI(TAG, "Öffne die Home App auf deinem iPhone/iPad");
-    ESP_LOGI(TAG, "Tippe auf '+' -> 'Gerät hinzufügen'");
-    ESP_LOGI(TAG, "Scanne den QR Code aus den Logs oder gib den Setup-Code manuell ein");
-    ESP_LOGI(TAG, "===============================================");
+    /* Starting driver with default values */
+    app_driver_light_set_defaults(light_endpoint_id);
+
+#if CONFIG_ENABLE_ENCRYPTED_OTA
+    err = esp_matter_ota_requestor_encrypted_init(s_decryption_key, s_decryption_key_len);
+    ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to initialized the encrypted OTA, err: %d", err));
+#endif // CONFIG_ENABLE_ENCRYPTED_OTA
 
 #if CONFIG_ENABLE_CHIP_SHELL
     esp_matter::console::diagnostics_register_commands();
+    esp_matter::console::wifi_register_commands();
+    esp_matter::console::factoryreset_register_commands();
+    esp_matter::console::attribute_register_commands();
+#if CONFIG_OPENTHREAD_CLI
+    esp_matter::console::otcli_register_commands();
+#endif
     esp_matter::console::init();
 #endif
+
+    while (true) {
+        MEMORY_PROFILER_DUMP_HEAP_STAT("Idle");
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }
 }
