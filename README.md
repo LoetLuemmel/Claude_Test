@@ -28,7 +28,7 @@ The following is the Memory and Flash Usage.
     commissionined or connected to wifi yet.
 -   `After Commissioning` == Device is conneted to wifi and is also
     commissioned and is rebooted.
--   device used: esp32c3_devkit_m
+-   device used: esp32dev von Joy-it.de
 -   tested on:
     [6a244a7](https://github.com/espressif/esp-matter/commit/6a244a7b1e5c70b0aa1bf57254f19718b0755d95)
     (2022-06-16)
