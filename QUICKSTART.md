@@ -110,11 +110,11 @@ COM3, COM4, etc.
 
 ## LED GPIO Übersicht
 
+# Ich nahm hier einfach ein Joy-it.de board.
+
 | Board | LED GPIO |
 |-------|----------|
-| ESP32-C3-DevKitM-1 | GPIO 8 |
-| ESP32-C3-DevKitC-02 | GPIO 8 |
-| Seeed XIAO ESP32C3 | GPIO 8 |
+| ESP32dev | GPIO 2 |
 | Custom Boards | Datenblatt prüfen |
 
 Falls LED nicht funktioniert, GPIO in `main/app_main.cpp` anpassen:
