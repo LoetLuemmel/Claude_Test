@@ -233,13 +233,24 @@ cd /Users/pitforster/Documents/Dev/Claude_Test/esp32_matter_light
 - ✅ Matter-Protokoll funktioniert stabil
 
 ### Technische Implementierung
+
+**LED-Steuerung:**
 - **LED GPIO**: GPIO 2 (on-board LED auf ESP32 DevKit)
 - **Steuerung**: Direkte GPIO-Kontrolle via `gpio_set_level()` in `app_driver.cpp`
 - **Grund**: Bypassing ESP-Matter LED driver für vorhersagbare GPIO 2 Kontrolle
 - **Logik**: GPIO HIGH (1) = LED AN, GPIO LOW (0) = LED AUS
-- **Dateien geändert**:
-  - `main/app_driver.cpp`: Direkte GPIO-Steuerung implementiert
-  - `main/app_main.cpp`: GPIO 2 Blink-Test hinzugefügt
+
+**Factory Reset Button:**
+- **Button GPIO**: GPIO 0 (BOOT Button auf ESP32 DevKit)
+- **Funktion**: 3-5 Sekunden halten → Factory Reset → Alle Fabrics löschen
+- **Vorteil**: Kein `idf.py erase-flash` mehr nötig zum Zurücksetzen
+- **Auto-Commissioning**: Nach Reset öffnet sich automatisch neues Commissioning Window
+
+**Dateien:**
+- `main/app_driver.cpp`: Direkte GPIO-Steuerung implementiert
+- `main/app_main.cpp`: GPIO 2 Blink-Test hinzugefügt
+- `main/app_reset.cpp`: Factory Reset Button Implementation
+- `main/app_reset.h`: Factory Reset Header
 
 ---
 

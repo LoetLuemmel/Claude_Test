@@ -202,10 +202,13 @@ Change from `on_off_light::create()` to `dimmable_light::create()` and implement
 
 ## File Reference
 
-- **`main/app_main.cpp`**: Core application logic (206 lines)
+- **`main/app_main.cpp`**: Core application logic with Matter node setup
+- **`main/app_driver.cpp`**: Direct GPIO LED control implementation
+- **`main/app_reset.cpp`**: Factory reset button functionality (GPIO 0)
+- **`main/app_reset.h`**: Factory reset function declarations
 - **`CMakeLists.txt`**: Project build configuration with Matter integration
-- **`sdkconfig.defaults`**: ESP32-C3 hardware configuration
-- **`partitions.csv`**: Flash memory layout
+- **`sdkconfig.defaults`**: ESP32 hardware configuration
+- **`partitions.csv`**: Flash memory layout (dual-OTA support)
 - **`build.sh`**: Automated build with environment checks
 - **`flash.sh`**: Automated flash with port auto-detection
 - **`PROJECT_STATUS.md`**: Complete project status and implementation checklist
@@ -244,12 +247,27 @@ Change from `on_off_light::create()` to `dimmable_light::create()` and implement
 - Bypasses ESP-Matter LED driver for predictable GPIO 2 control
 - GPIO HIGH = LED ON, GPIO LOW = LED OFF
 
-### Factory Reset (if needed)
+### Factory Reset
 
-To completely reset the device (clear all pairing data):
+**Method 1: Hardware Button (Recommended)**
+
+Press and hold the **BOOT button (GPIO 0)** on the ESP32 DevKit for **3-5 seconds**:
+
+1. Hold BOOT button → Serial monitor shows: `"Factory reset triggered. Release the button to start factory reset."`
+2. Release button → Factory reset starts
+3. Device restarts automatically
+4. New commissioning window opens
+5. Ready for re-pairing with QR code or manual code
+
+**Method 2: Command Line (Alternative)**
+
+To completely reset via command line:
 ```bash
 idf.py erase-flash
 idf.py -p /dev/cu.usbserial-110 flash
 ```
 
-This is required when switching between Extended Color Light and On/Off Light or when re-pairing to a different Home.
+**When to use Factory Reset:**
+- After removing device from Apple Home (if commissioning window doesn't open automatically)
+- When switching between different Matter controllers
+- To clear all pairing data and start fresh
