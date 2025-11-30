@@ -110,7 +110,7 @@ COM3, COM4, etc.
 
 ## LED GPIO Übersicht
 
-# Ich nahm hier einfach ein Joy-it.de board.
+Ich nahm hier einfach ein Joy-it.de board.
 
 | Board | LED GPIO |
 |-------|----------|
