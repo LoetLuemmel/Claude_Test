@@ -1,7 +1,6 @@
 # Light
 
-This example creates a Color Temperature Light device using the ESP
-Matter data model.
+This example creates an ESP32 device, that can be added to Apple Home using the Matter data model.
 
 See the [docs](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/developing.html) for more information about building and flashing the firmware.
 
@@ -11,7 +10,13 @@ No additional setup is required.
 
 ## 2. Post Commissioning Setup
 
-No additional setup is required.
+Power ESP32 device, open Apple home.
+Klick the (+) button and scan the QR code.
+
+Important: The QR-Code is device specific and needs to be created for each device individually.
+
+Follow the instructions provided by Apple home.
+
 
 ## 3. Device Performance
 
