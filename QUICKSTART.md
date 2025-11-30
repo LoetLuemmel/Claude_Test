@@ -49,7 +49,7 @@ source ~/esp/esp-matter/export.sh
 
 ```bash
 # Zum Projektverzeichnis
-cd /Users/pitforster/Documents/Dev/Claude_Test/esp32_matter_light
+cd /Users/pitforster/Documents/Dev/ESP32_Apple_home/esp32_matter_light
 
 # Target setzen
 idf.py set-target esp32c3
