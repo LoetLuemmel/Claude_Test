@@ -13,7 +13,7 @@ No additional setup is required.
 Power ESP32 device, open Apple home.
 Klick the (+) button and scan the QR code.
 
-Important: The QR-Code is device specific and needs to be created for each device individually.
+**Important:** The QR-Code is device specific and needs to be created for each device individually.
 
 Follow the instructions provided by Apple home.
 
